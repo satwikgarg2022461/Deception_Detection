@@ -16,7 +16,7 @@ from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_se
 from tqdm import tqdm
 
 # Set paths
-project_dir = "d:\\NLP\\Deception_Detection"
+project_dir = ""
 data_dir = os.path.join(project_dir,  "dataset")
 test_path = os.path.join(data_dir, "test.jsonl")
 train_path = os.path.join(data_dir, "train.jsonl")
@@ -545,12 +545,12 @@ if __name__ == '__main__':
     # Compare with paper results
     paper_results = {
         'sender': {
-            'with_power': {'macro_f1': 0.691, 'binary_f1': 0.527},
-            'without_power': {'macro_f1': 0.672, 'binary_f1': 0.471},
+            'with_power': {'macro_f1': 0.561, 'binary_f1': 0.209},
+            'without_power': {'macro_f1': 0.527, 'binary_f1': 0.135},
         },
         'receiver': {
-            'with_power': {'macro_f1': 0.749, 'binary_f1': 0.664},
-            'without_power': {'macro_f1': 0.732, 'binary_f1': 0.630},
+            'with_power': {'macro_f1': 0.536, 'binary_f1': 0.124},
+            'without_power': {'macro_f1': 0.533, 'binary_f1': 0.151},
         }
     }
     
@@ -560,4 +560,4 @@ if __name__ == '__main__':
     
     print("\n=== Comparison with Paper Results ===")
     print(f"Our Macro F1: {metrics['macro_f1']:.4f}   Paper: {paper_macro_f1:.4f}")
-    print(f"Our Binary F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")
+    print(f"Our Lie F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")

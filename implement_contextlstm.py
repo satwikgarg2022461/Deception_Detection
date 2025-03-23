@@ -20,7 +20,7 @@ from gensim.models import KeyedVectors
 import pickle
 
 # Set paths
-project_dir = "d:\\NLP\\Deception_Detection"
+project_dir = ""
 data_dir = os.path.join(project_dir, "dataset")
 models_dir = os.path.join(project_dir, "models")
 test_path = os.path.join(data_dir, "test.jsonl")
@@ -615,12 +615,12 @@ if __name__ == '__main__':
     # Compare with paper results
     paper_results = {
         'sender': {
-            'with_power': {'macro_f1': 0.656, 'binary_f1': 0.460},
-            'without_power': {'macro_f1': 0.625, 'binary_f1': 0.400},
+            'with_power': {'macro_f1': 0.572, 'binary_f1': 0.27},
+            'without_power': {'macro_f1': 0.558, 'binary_f1': 0.192},
         },
         'receiver': {
-            'with_power': {'macro_f1': 0.711, 'binary_f1': 0.606},
-            'without_power': {'macro_f1': 0.682, 'binary_f1': 0.568},
+            'with_power': {'macro_f1': 0.533, 'binary_f1': 0.13},
+            'without_power': {'macro_f1': 0.543, 'binary_f1': 0.15},
         }
     }
     
@@ -630,4 +630,4 @@ if __name__ == '__main__':
     
     print("\n=== Comparison with Paper Results ===")
     print(f"Our Macro F1: {metrics['macro_f1']:.4f}   Paper: {paper_macro_f1:.4f}")
-    print(f"Our Binary F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")
+    print(f"Our Lie F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")

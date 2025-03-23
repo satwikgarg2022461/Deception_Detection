@@ -15,7 +15,7 @@ import joblib
 from tqdm import tqdm
 
 # Set paths
-project_dir = "d:\\NLP\\Deception_Detection"
+project_dir = ""
 data_dir = os.path.join(project_dir, "dataset")
 test_path = os.path.join(data_dir, "test.jsonl")
 train_path = os.path.join(data_dir, "train.jsonl")
@@ -240,12 +240,12 @@ if __name__ == '__main__':
     # Compare with paper results
     paper_results = {
         'sender': {
-            'with_power': {'macro_f1': 0.539, 'binary_f1': 0.383},
-            'without_power': {'macro_f1': 0.536, 'binary_f1': 0.340},
+            'with_power': {'macro_f1': 0.549, 'binary_f1': 0.202},
+            'without_power': {'macro_f1': 0.543, 'binary_f1': 0.191},
         },
         'receiver': {
-            'with_power': {'macro_f1': 0.611, 'binary_f1': 0.469},
-            'without_power': {'macro_f1': 0.608, 'binary_f1': 0.441},
+            'with_power': {'macro_f1': 0.516, 'binary_f1': 0.139},
+            'without_power': {'macro_f1': 0.515, 'binary_f1': 0.137},
         }
     }
     
@@ -255,4 +255,4 @@ if __name__ == '__main__':
     
     print("\n=== Comparison with Paper Results ===")
     print(f"Our Macro F1: {metrics['macro_f1']:.4f}   Paper: {paper_macro_f1:.4f}")
-    print(f"Our Binary F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")
+    print(f"Our Lie F1: {metrics['binary_f1']:.4f}   Paper: {paper_binary_f1:.4f}")

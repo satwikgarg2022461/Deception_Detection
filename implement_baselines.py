@@ -6,7 +6,7 @@ import jsonlines
 import os
 
 # Set paths
-project_dir = "d:\\NLP\\Deception_Detection"
+project_dir = ""
 data_dir = os.path.join(project_dir, "dataset")
 test_path = os.path.join(data_dir, "test.jsonl")
 train_path = os.path.join(data_dir, "train.jsonl")
@@ -153,11 +153,11 @@ if __name__ == '__main__':
     print("\n=== Comparison with Paper Results ===")
     print("                      | Our Implementation | Paper Results")
     print("---------------------------------------------------------")
-    print(f"Sender Random Macro F1  | {sender_random_metrics['macro_f1']:.4f}              | 0.493")
-    print(f"Sender Random Lie F1    | {sender_random_metrics['binary_f1']:.4f}              | 0.298")
-    print(f"Sender Majority Macro F1| {sender_majority_metrics['macro_f1']:.4f}              | 0.442")
+    print(f"Sender Random Macro F1  | {sender_random_metrics['macro_f1']:.4f}              | 0.398")
+    print(f"Sender Random Lie F1    | {sender_random_metrics['binary_f1']:.4f}              | 0.149")
+    print(f"Sender Majority Macro F1| {sender_majority_metrics['macro_f1']:.4f}              | 0.478")
     print(f"Sender Majority Lie F1  | {sender_majority_metrics['binary_f1']:.4f}              | 0.000")
-    print(f"Receiver Random Macro F1| {receiver_random_metrics['macro_f1']:.4f}              | 0.494")
-    print(f"Receiver Random Lie F1  | {receiver_random_metrics['binary_f1']:.4f}              | 0.404")
-    print(f"Receiver Majority Mac F1| {receiver_majority_metrics['macro_f1']:.4f}              | 0.413")
+    print(f"Receiver Random Macro F1| {receiver_random_metrics['macro_f1']:.4f}              | 0.383")
+    print(f"Receiver Random Lie F1  | {receiver_random_metrics['binary_f1']:.4f}              | 0.118")
+    print(f"Receiver Majority Mac F1| {receiver_majority_metrics['macro_f1']:.4f}              | 0.483")
     print(f"Receiver Majority Lie F1| {receiver_majority_metrics['binary_f1']:.4f}              | 0.000")

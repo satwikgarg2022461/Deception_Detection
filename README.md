@@ -66,7 +66,7 @@ You can run individual models or all models using the provided scripts.
 
 ```bash
 # Run all models with default settings (sender task, no power features)
-bash run_models.sh
+bash run_models.sh --run-all
 
 # Run specific model (e.g., LSTM) on sender task with power features
 bash run_models.sh --model lstm --task sender --power
