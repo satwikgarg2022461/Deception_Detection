@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, classification_report
@@ -33,7 +34,7 @@ os.makedirs(models_dir, exist_ok=True)
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Tokenization function
+# Tokenization function - similar to WordTokenizer in AllenNLP
 def tokenize_text(text):
     """Simple tokenization function for text"""
     # Convert to lowercase
@@ -45,7 +46,7 @@ def tokenize_text(text):
     return tokens
 
 def load_glove_embeddings(word_to_idx, embedding_dim=200):
-    """Load GloVe Twitter embeddings"""
+    """Load GloVe Twitter embeddings - matches config file's pretrained_file"""
     print(f"Loading GloVe Twitter embeddings (dimension={embedding_dim})...")
     
     # Path for cached embeddings
@@ -61,7 +62,8 @@ def load_glove_embeddings(word_to_idx, embedding_dim=200):
     else:
         print(f"Downloading GloVe Twitter embeddings...")
         try:
-            # Load glove twitter embeddings
+            # Load glove twitter embeddings - specifically glove.twitter.27B.200d
+            # This matches the config file: "pretrained_file": "(http://nlp.stanford.edu/data/glove.twitter.27B.zip)#glove.twitter.27B.200d.txt"
             glove_model = gensim.downloader.load('glove-twitter-200')
             
             # Cache the embeddings for future use
@@ -83,65 +85,107 @@ def load_glove_embeddings(word_to_idx, embedding_dim=200):
     
     return embedding_matrix
 
+# Fix the weighted loss function to handle dimensions correctly
+def weighted_sequence_cross_entropy_with_logits(logits, targets, mask, weights=None):
+    """Implementation of weighted_sequence_cross_entropy_with_logits from hlstm.py"""
+    # Flatten all dimensions for loss calculation
+    batch_size, seq_len, num_classes = logits.size()
+    
+    # Reshape logits to (batch_size*seq_len, num_classes)
+    logits_flat = logits.view(-1, num_classes)
+    
+    # Ensure mask is 1D and same length as flattened logits
+    mask_flat = mask.view(-1).float()
+    
+    # Ensure targets is 1D and has the same length as mask
+    if targets.dim() == 1:
+        # If targets is already 1D, just make sure it aligns with valid positions
+        valid_indices = torch.nonzero(mask_flat).squeeze()
+        if len(valid_indices.shape) == 0:
+            valid_indices = valid_indices.unsqueeze(0)
+        valid_logits = logits_flat[valid_indices]
+        valid_targets = targets  # Already correct size
+    else:
+        # If targets is 2D or higher, flatten it
+        targets_flat = targets.view(-1)
+        valid_indices = torch.nonzero(mask_flat).squeeze()
+        if len(valid_indices.shape) == 0:
+            valid_indices = valid_indices.unsqueeze(0)
+        valid_logits = logits_flat[valid_indices]
+        valid_targets = targets_flat[valid_indices]
+    
+    # Calculate element-wise loss with specified weights
+    loss = F.cross_entropy(valid_logits, valid_targets, weight=weights, reduction='mean')
+    return loss
+
 class ConversationDataset(Dataset):
-    """Dataset for conversation-level processing"""
+    """Dataset for conversation-level processing - equivalent to diplomacy_reader from game_reader.py"""
     def __init__(self, data, word_to_idx, max_length=100, max_conv_length=10, use_power=False, task="sender"):
         self.data = data
         self.word_to_idx = word_to_idx
         self.max_length = max_length
         self.max_conv_length = max_conv_length
         self.use_power = use_power
-        self.task = task
+        self.task = task  # Corresponds to 'label_key' in diplomacy_reader
         
         # Process conversations
         self.processed_data = []
         self.process_conversations()
     
     def process_conversations(self):
-        """Process conversations to maintain message context"""
+        """Process conversations to match DiplomacyReader._read implementation"""
         for conversation in self.data:
+            # Skip empty conversations
+            if len(conversation['messages']) == 0:
+                continue
+                
             conv_messages = []
             conv_lengths = []
             conv_powers = []
             conv_labels = []
+            conv_speakers = []
             
-            for i, message in enumerate(conversation['messages']):
+            # Get label key based on task
+            label_key = 'sender_labels' if self.task.lower() == "sender" else 'receiver_labels'
+            
+            # Extract messages, speakers, and labels (matching DiplomacyReader.text_to_instance)
+            for i, (message, speaker) in enumerate(zip(conversation['messages'], conversation['speakers'])):
+                # Skip messages with invalid labels
+                if label_key not in conversation or i >= len(conversation[label_key]):
+                    continue
+                    
+                label = conversation[label_key][i]
+                if label not in [True, False]:
+                    continue
+                
                 # Process message text
-                text = message
-                tokens = tokenize_text(text)
+                tokens = tokenize_text(message)
                 
                 # Skip empty messages or ensure minimum length of 1
                 if len(tokens) == 0:
-                    tokens = ["<UNK>"]  # Use unknown token for empty messages
+                    tokens = ["<UNK>"]
                     
                 indices = [self.word_to_idx.get(token, self.word_to_idx['<UNK>']) for token in tokens]
                 
                 # Truncate if too long
                 if len(indices) > self.max_length:
                     indices = indices[:self.max_length]
-                    
+                
+                # Following DiplomacyReader, True = truthful (0), False = deceptive (1)
+                binary_label = 0 if label else 1
+                
                 conv_lengths.append(len(indices))
                 # Add padding to max_length
                 indices = indices + [self.word_to_idx['<PAD>']] * (self.max_length - len(indices))
                 conv_messages.append(indices)
+                conv_labels.append(binary_label)
+                conv_speakers.append(speaker)
                 
-                # Process power features
+                # Process power features if requested - matches use_game_scores in config
                 if self.use_power:
-                    conv_powers.append([
-                        1 if int(conversation['game_score_delta'][i]) > 4 else 0,  # Sender much stronger
-                        1 if int(conversation['game_score_delta'][i]) < -4 else 0   # Receiver much stronger
-                    ])
-                
-                # Get label based on task
-                if self.task.lower() == "sender":
-                    label = 0 if conversation['sender_labels'][i] else 1  # 0 = truthful, 1 = deceptive
-                    conv_labels.append(label)
-                else:  # receiver task
-                    # Skip if no receiver annotation
-                    if conversation['receiver_labels'][i] not in [True, False]:
-                        continue
-                    label = 0 if conversation['receiver_labels'][i] else 1  # 0 = truthful, 1 = deceptive
-                    conv_labels.append(label)
+                    game_score = conversation['game_score_delta'][i]
+                    # Store raw game score as in DiplomacyReader
+                    conv_powers.append([float(game_score)])
             
             # Skip if no valid messages in this conversation
             if len(conv_messages) == 0:
@@ -152,23 +196,22 @@ class ConversationDataset(Dataset):
                 conv_messages = conv_messages[-self.max_conv_length:]
                 conv_lengths = conv_lengths[-self.max_conv_length:]
                 conv_labels = conv_labels[-self.max_conv_length:]
+                conv_speakers = conv_speakers[-self.max_conv_length:]
                 if self.use_power:
                     conv_powers = conv_powers[-self.max_conv_length:]
             
             # Add to processed data
+            data_item = {
+                'messages': conv_messages,
+                'lengths': conv_lengths,
+                'labels': conv_labels,
+                'speakers': conv_speakers
+            }
+            
             if self.use_power:
-                self.processed_data.append({
-                    'messages': conv_messages,
-                    'lengths': conv_lengths,
-                    'powers': conv_powers,
-                    'labels': conv_labels
-                })
-            else:
-                self.processed_data.append({
-                    'messages': conv_messages,
-                    'lengths': conv_lengths,
-                    'labels': conv_labels
-                })
+                data_item['powers'] = conv_powers
+                
+            self.processed_data.append(data_item)
     
     def __len__(self):
         return len(self.processed_data)
@@ -202,11 +245,14 @@ def collate_batch(batch):
     all_messages = torch.cat(messages)
     all_lengths = torch.cat(lengths)
     
-    # For conversation-level tasks, we DON'T want to flatten labels
-    # Instead keep them as batch of label lists
-    # If we need the last label for each conversation:
-    conv_labels = [conv_label[-1] for conv_label in labels]  # Take last message's label
-    all_labels = torch.stack(conv_labels)
+    # Convert batch of labels to tensor
+    all_labels = torch.cat(labels)
+    
+    # Create conversation mask - equivalent to mask in hlstm.py
+    conversation_mask = []
+    for msg in messages:
+        conversation_mask.append(torch.ones(len(msg)))
+    conversation_mask = torch.cat(conversation_mask)
     
     # Store conversation boundaries for the conversation encoder
     conv_boundaries = [0]
@@ -216,111 +262,215 @@ def collate_batch(batch):
         conv_boundaries.append(total_msgs)
     
     if has_power:
-        return all_messages, all_lengths, conv_boundaries, powers, all_labels
+        return all_messages, all_lengths, conversation_mask, conv_boundaries, powers, all_labels
     else:
-        return all_messages, all_lengths, conv_boundaries, all_labels
-    
+        return all_messages, all_lengths, conversation_mask, conv_boundaries, all_labels
+
+class PooledRNN(nn.Module):
+    """Implementation of pooled_rnn from pooled_rnn.py"""
+    def __init__(self, input_size, hidden_size, bidirectional=True, poolers="max"):
+        super().__init__()
+        self.rnn = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            bidirectional=bidirectional,
+            batch_first=True
+        )
+        self.poolers = poolers.split(',')
+        self.bidirectional = bidirectional
+        self.hidden_size = hidden_size
+        
+    def forward(self, embedded, mask):
+        """Implementation following PooledRNN.forward in the original pooled_rnn.py"""
+        # Get lengths from mask for pack_padded_sequence
+        lengths = mask.sum(dim=1).clamp(min=1).cpu()
+        
+        # Run through the RNN
+        packed_embedded = pack_padded_sequence(embedded, lengths, batch_first=True, enforce_sorted=False)
+        packed_output, (hidden, cell) = self.rnn(packed_embedded)
+        output, _ = pad_packed_sequence(packed_output, batch_first=True)
+        
+        # Get proper boolean mask
+        mask = mask.bool()
+        batch_size = embedded.size(0)
+        pooled = []
+        
+        # Apply pooling based on poolers using approaches from pooled_rnn.py
+        if 'max' in self.poolers:
+            # Create a proper mask for max pooling (with -inf for padding)
+            # Make sure the mask is properly reshaped to match output
+            max_mask = mask.unsqueeze(-1).expand(-1, -1, output.size(-1))
+            # For any positions beyond the actual output length, set mask to False
+            if max_mask.size(1) > output.size(1):
+                max_mask = max_mask[:, :output.size(1), :]
+                
+            # Apply the mask and get max values
+            masked_output = output.masked_fill(~max_mask, float('-inf'))
+            max_pooled, _ = torch.max(masked_output, dim=1)
+            pooled.append(max_pooled)
+            
+        if 'mean' in self.poolers:
+            # Create proper mask for mean pooling
+            mean_mask = mask.unsqueeze(-1).float() 
+            
+            # Ensure the mask matches output dimensions
+            if mean_mask.size(1) > output.size(1):
+                mean_mask = mean_mask[:, :output.size(1), :]
+            else:
+                mean_mask = mean_mask.expand(-1, -1, output.size(-1))
+            
+            # Sum values and divide by actual length
+            sum_pooled = torch.sum(output * mean_mask, dim=1)
+            mean_pooled = sum_pooled / lengths.float().unsqueeze(-1).clamp(min=1)
+            pooled.append(mean_pooled)
+            
+        if 'last' in self.poolers:
+            # Extract last valid state as in the original pooled_rnn.py
+            if not self.bidirectional:
+                # For unidirectional, just use the last hidden state
+                pooled.append(hidden[-1])
+            else:
+                # For bidirectional, combine first and last directions
+                forward = hidden[0]  # Forward direction
+                backward = hidden[1]  # Backward direction
+                pooled.append(torch.cat([forward, backward], dim=1))
+                
+        # Concatenate all pooling results
+        return torch.cat(pooled, dim=1) if len(pooled) > 1 else pooled[0]
+
 class ContextLSTMModel(nn.Module):
-    """Hierarchical LSTM model for deception detection"""
+    """Hierarchical LSTM model for deception detection - implements hierarchical_lstm from hlstm.py"""
     def __init__(self, vocab_size, embedding_dim, message_hidden_dim, conv_hidden_dim, 
                  output_dim, embedding_weights=None, use_power=False, dropout=0.3):
-        super(ContextLSTMModel, self).__init__()
+        super().__init__()
         
-        # Embedding layer
+        # Embedding layer - matches config's "embedder" with trainable=false
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
         if embedding_weights is not None:
             self.embedding.weight = nn.Parameter(embedding_weights)
+            # Don't train the embeddings to match trainable=false
+            self.embedding.weight.requires_grad = False
         
-        # Message encoder (bidirectional LSTM)
-        self.message_lstm = nn.LSTM(embedding_dim, 
-                                   message_hidden_dim, 
-                                   bidirectional=True, 
-                                   batch_first=True)
+        # Message encoder using PooledRNN with max pooler - matches message_encoder in config
+        self.message_encoder = PooledRNN(
+            input_size=embedding_dim,
+            hidden_size=message_hidden_dim,
+            bidirectional=True,
+            poolers="max"  # Match the config's "poolers": "max"
+        )
         
-        # Conversation encoder (unidirectional LSTM)
-        # Input size is 2*message_hidden_dim due to bidirectional message LSTM
-        self.conv_lstm = nn.LSTM(2 * message_hidden_dim, 
-                                conv_hidden_dim,
-                                bidirectional=False,
-                                batch_first=True)
+        # Conversation encoder (unidirectional LSTM) - matches conversation_encoder in config
+        message_output_dim = message_hidden_dim * 2  # Bidirectional doubles output size
+        self.conv_lstm = nn.LSTM(
+            input_size=message_output_dim,
+            hidden_size=conv_hidden_dim,
+            bidirectional=False,
+            batch_first=True
+        )
         
-        # Dropout layer
+        # Dropout layer - matches "dropout" in config
         self.dropout = nn.Dropout(dropout)
         
-        # Power feature flag
+        # Power feature flag - matches "use_game_scores" in config
         self.use_power = use_power
         
         # Output layer
-        if use_power:
-            self.fc = nn.Linear(conv_hidden_dim + 2, output_dim)  # +2 for power features
-        else:
-            self.fc = nn.Linear(conv_hidden_dim, output_dim)
-    
-    def forward(self, messages, lengths, conv_boundaries, power=None):
-        # messages shape: [total_messages, seq_len]
+        final_dim = conv_hidden_dim + (1 if use_power else 0)  # +1 for game score
+        self.classifier = nn.Linear(final_dim, output_dim)
         
+        # F1 metrics for evaluation
+        self.output_dim = output_dim
+    
+    def forward(self, messages, lengths, mask, conv_boundaries, power=None):
+        """Forward pass matching HierarchicalLSTM.forward in hlstm.py"""
         # Get embeddings
         embedded = self.embedding(messages)  # [total_messages, seq_len, embedding_dim]
+        embedded = self.dropout(embedded)
+        
+        # Create a message mask that exactly matches the embedded dimensions
+        # This is important to ensure proper masking in PooledRNN
+        message_mask = torch.zeros((messages.size(0), embedded.size(1)), 
+                                  dtype=torch.bool, device=device)
+        for i, length in enumerate(lengths):
+            message_mask[i, :length] = True
         
         # Message-level encoding
-        packed_embedded = pack_padded_sequence(embedded, lengths.cpu(), batch_first=True, enforce_sorted=False)
-        packed_output, (hidden, _) = self.message_lstm(packed_embedded)
-        
-        # Concatenate forward and backward hidden states
-        # hidden shape: [2, total_messages, message_hidden_dim]
-        message_repr = torch.cat((hidden[0], hidden[1]), dim=1)  # [total_messages, 2*message_hidden_dim]
+        message_repr = self.message_encoder(embedded, message_mask)
         message_repr = self.dropout(message_repr)
         
         # Group messages by conversation
         conversation_inputs = []
-        for i in range(len(conv_boundaries) - 1):
+        conversation_masks = []
+        batch_size = len(conv_boundaries) - 1
+        for i in range(batch_size):
             start, end = conv_boundaries[i], conv_boundaries[i+1]
             conversation_inputs.append(message_repr[start:end])
-        
+            # Create mask for valid messages in conversation
+            msg_mask = torch.ones(end - start, dtype=torch.bool, device=device)
+            conversation_masks.append(msg_mask)
+            
         # Pad conversations to same length
         padded_convs = pad_sequence(conversation_inputs, batch_first=True)
+        conversation_mask = pad_sequence(conversation_masks, batch_first=True, padding_value=False)
         
         # Conversation-level encoding
-        _, (conv_hidden, _) = self.conv_lstm(padded_convs)
+        packed_convs = pack_padded_sequence(
+            padded_convs, 
+            lengths=[len(c) for c in conversation_inputs],
+            batch_first=True, 
+            enforce_sorted=False
+        )
+        packed_output, (conv_hidden, _) = self.conv_lstm(packed_convs)
+        conv_output, _ = pad_packed_sequence(packed_output, batch_first=True)
         
-        # Get final hidden state
-        conv_hidden = conv_hidden.squeeze(0)  # [batch_size, conv_hidden_dim]
-        conv_hidden = self.dropout(conv_hidden)
+        # Apply dropout to output
+        conv_output = self.dropout(conv_output)
         
-        # Add power features if requested
-        # For this, we need to associate power with the right message
-        # Since we're predicting at conversation level, we'll need to select the power for the target message
+        # Add power features if requested - matches use_game_scores in config
         if self.use_power and power is not None:
-            # Here we could select power features for the last message in each conversation
-            # or use an attention mechanism to focus on specific messages
-            # For simplicity, we'll use the power of the last message in each conversation
-            batch_powers = []
+            # Create a properly sized tensor for game scores
+            # Must be same batch size and sequence length as conv_output
+            batch_size = conv_output.size(0)
+            seq_len = conv_output.size(1)
+            game_scores_tensor = torch.zeros(batch_size, seq_len, 1, device=device)
+            
+            # Fill in the actual power values
             for i in range(len(conv_boundaries) - 1):
                 start, end = conv_boundaries[i], conv_boundaries[i+1]
-                batch_powers.append(power[end - 1])
-            batch_powers = torch.stack(batch_powers)
+                # Get power values for this conversation
+                conv_powers = power[start:end]
+                
+                # Only fill up to the minimum of available scores or sequence length
+                length = min(len(conv_powers), seq_len)
+                if length > 0:
+                    # Reshape to [length, 1] and place in the tensor
+                    game_scores_tensor[i, :length, 0] = conv_powers[:length, 0]
             
-            # Combine with conversation representation
-            combined = torch.cat((conv_hidden, batch_powers), dim=1)
-            output = self.fc(combined)
-        else:
-            output = self.fc(conv_hidden)
+            # Concatenate with conv_output along feature dimension
+            conv_output = torch.cat([conv_output, game_scores_tensor], dim=2)
         
-        return output
+        # Apply classifier to get logits
+        logits = self.classifier(conv_output)
+        
+        return logits, conversation_mask
 
 def train_epoch(model, data_loader, optimizer, criterion, device, use_power=False):
     """Train model for one epoch"""
     model.train()
     epoch_loss = 0
-    epoch_acc = 0
+    
+    all_preds = []
+    all_labels = []
     
     # Add progress bar for training batches
     progress_bar = tqdm(data_loader, desc="Training", leave=False)
+    
     for batch in progress_bar:
         if use_power:
-            messages, lengths, conv_boundaries, powers, labels = batch
+            messages, lengths, mask, conv_boundaries, powers, labels = batch
             messages = messages.to(device)
             lengths = lengths.to(device)
+            mask = mask.to(device)
             powers = powers.to(device)
             labels = labels.to(device)
             
@@ -328,46 +478,96 @@ def train_epoch(model, data_loader, optimizer, criterion, device, use_power=Fals
             optimizer.zero_grad()
             
             # Forward pass
-            predictions = model(messages, lengths, conv_boundaries, powers)
+            logits, conversation_mask = model(messages, lengths, mask, conv_boundaries, powers)
             
         else:
-            messages, lengths, conv_boundaries, labels = batch
+            messages, lengths, mask, conv_boundaries, labels = batch
             messages = messages.to(device)
             lengths = lengths.to(device)
+            mask = mask.to(device)
             labels = labels.to(device)
             
             # Zero gradients
             optimizer.zero_grad()
             
             # Forward pass
-            predictions = model(messages, lengths, conv_boundaries)
+            logits, conversation_mask = model(messages, lengths, mask, conv_boundaries)
         
-        # Calculate loss
-        loss = criterion(predictions, labels)
+        # Calculate loss using weighted_sequence_cross_entropy_with_logits from hlstm.py
+        weight = torch.tensor([1.0, float(criterion.pos_weight)], device=device)
+        
+        # Make sure conversation_mask and labels are on the same device
+        conversation_mask = conversation_mask.to(device)
+        
+        # Only keep the actual length of the labels array
+        # This ensures we don't include padding labels
+        total_length = 0
+        for i in range(len(conv_boundaries) - 1):
+            start, end = conv_boundaries[i], conv_boundaries[i+1]
+            total_length += end - start
+            
+        # Ensure labels match the actual conversation mask
+        labels = labels[:total_length]
+        
+        # Calculate loss on correctly aligned tensors
+        loss = weighted_sequence_cross_entropy_with_logits(logits, labels, conversation_mask, weights=weight)
         
         # Backward pass
         loss.backward()
         
+        # Apply gradient clipping at 1.0 to match config's "grad_clipping": 1
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        
         # Update parameters
         optimizer.step()
         
-        # Calculate accuracy
-        preds = torch.argmax(predictions, dim=1)
-        acc = torch.sum(preds == labels).float() / len(labels)
+        # Calculate accuracy and F1 - Fix the dimension mismatch here
+        preds = torch.argmax(logits, dim=-1)
+        
+        # Extract valid predictions and labels - fix dimension issue
+        valid_preds = []
+        valid_labels = []
+        
+        # Properly align predictions and labels using conversation boundaries
+        for i in range(len(conv_boundaries) - 1):
+            start, end = conv_boundaries[i], conv_boundaries[i+1]
+            # Get mask for this conversation
+            conv_mask = conversation_mask[i, :end-start]
+            # Get predictions for this conversation where mask is True
+            conv_preds = preds[i, :end-start][conv_mask]
+            # Get corresponding labels
+            conv_labels = labels[start:end]
+            
+            valid_preds.append(conv_preds)
+            valid_labels.append(conv_labels)
+        
+        # Flatten predictions and labels
+        valid_preds = torch.cat(valid_preds)
+        valid_labels = torch.cat(valid_labels)
+        
+        # Update tracking
+        all_preds.extend(valid_preds.cpu().numpy())
+        all_labels.extend(valid_labels.cpu().numpy())
         
         epoch_loss += loss.item()
-        epoch_acc += acc.item()
         
         # Update progress bar
-        progress_bar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{acc.item():.4f}")
+        progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     
-    return epoch_loss / len(data_loader), epoch_acc / len(data_loader)
+    # Calculate epoch metrics
+    if len(all_preds) > 0:  # Avoid empty predictions
+        epoch_acc = accuracy_score(all_labels, all_preds)
+        epoch_macro_f1 = f1_score(all_labels, all_preds, average='macro')
+    else:
+        epoch_acc = 0.0
+        epoch_macro_f1 = 0.0
+    
+    return epoch_loss / len(data_loader), epoch_acc, epoch_macro_f1
 
 def evaluate(model, data_loader, criterion, device, use_power=False):
     """Evaluate model on a dataset"""
     model.eval()
     epoch_loss = 0
-    epoch_acc = 0
     
     all_preds = []
     all_labels = []
@@ -377,43 +577,90 @@ def evaluate(model, data_loader, criterion, device, use_power=False):
     with torch.no_grad():
         for batch in progress_bar:
             if use_power:
-                messages, lengths, conv_boundaries, powers, labels = batch
+                messages, lengths, mask, conv_boundaries, powers, labels = batch
                 messages = messages.to(device)
                 lengths = lengths.to(device)
+                mask = mask.to(device)
                 powers = powers.to(device)
                 labels = labels.to(device)
                 
                 # Forward pass
-                predictions = model(messages, lengths, conv_boundaries, powers)
+                logits, conversation_mask = model(messages, lengths, mask, conv_boundaries, powers)
+                
             else:
-                messages, lengths, conv_boundaries, labels = batch
+                messages, lengths, mask, conv_boundaries, labels = batch
                 messages = messages.to(device)
                 lengths = lengths.to(device)
+                mask = mask.to(device)
                 labels = labels.to(device)
                 
                 # Forward pass
-                predictions = model(messages, lengths, conv_boundaries)
+                logits, conversation_mask = model(messages, lengths, mask, conv_boundaries)
             
             # Calculate loss
-            loss = criterion(predictions, labels)
+            weight = torch.tensor([1.0, float(criterion.pos_weight)], device=device)
+            loss = weighted_sequence_cross_entropy_with_logits(logits, labels, conversation_mask, weights=weight)
             
-            # Calculate accuracy
-            preds = torch.argmax(predictions, dim=1)
-            acc = torch.sum(preds == labels).float() / len(labels)
+            # Calculate predictions - Fix the dimension mismatch here
+            preds = torch.argmax(logits, dim=-1)
+            
+            # Extract valid predictions and labels - fix dimension issue
+            valid_preds = []
+            valid_labels = []
+            
+            # Properly align predictions and labels using conversation boundaries
+            for i in range(len(conv_boundaries) - 1):
+                start, end = conv_boundaries[i], conv_boundaries[i+1]
+                # Get mask for this conversation
+                conv_mask = conversation_mask[i, :end-start]
+                # Get predictions for this conversation where mask is True
+                conv_preds = preds[i, :end-start][conv_mask]
+                # Get corresponding labels
+                conv_labels = labels[start:end]
+                
+                valid_preds.append(conv_preds)
+                valid_labels.append(conv_labels)
+            
+            # Flatten predictions and labels
+            if valid_preds:  # Check if we have any valid predictions
+                valid_preds = torch.cat(valid_preds)
+                valid_labels = torch.cat(valid_labels)
+                
+                # Update tracking
+                all_preds.extend(valid_preds.cpu().numpy())
+                all_labels.extend(valid_labels.cpu().numpy())
             
             epoch_loss += loss.item()
-            epoch_acc += acc.item()
-            
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
             
             # Update progress bar
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{acc.item():.4f}")
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     
-    return epoch_loss / len(data_loader), epoch_acc / len(data_loader), all_preds, all_labels
+    # Calculate metrics
+    metrics = {
+        'loss': epoch_loss / len(data_loader),
+        'accuracy': accuracy_score(all_labels, all_preds),
+        'macro_f1': f1_score(all_labels, all_preds, average='macro'),
+        'binary_f1': f1_score(all_labels, all_preds, average='binary', pos_label=1),
+        'precision': precision_score(all_labels, all_preds, average='binary', pos_label=1, zero_division=0),
+        'recall': recall_score(all_labels, all_preds, average='binary', pos_label=1, zero_division=0)
+    }
+    
+    return metrics, all_preds, all_labels
 
+class WeightedCrossEntropyLoss:
+    """Custom loss class to match hlstm.py's weighted_sequence_cross_entropy_with_logits"""
+    def __init__(self, pos_weight=1.0):
+        self.pos_weight = pos_weight
+
+# Fix the print statement that has uppercase UPPER() method instead of upper()
 def run_contextlstm_model(task="sender", use_power=False, save_model=True):
     """Run ContextLSTM model for deception detection"""
+    # Set random seeds for reproducibility - matching config's seeds
+    torch.manual_seed(1994)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(1994)
+    
     # Load datasets
     print(f"Loading data for {task.upper()} task with power={use_power}")
     with jsonlines.open(train_path, 'r') as reader:
@@ -451,8 +698,29 @@ def run_contextlstm_model(task="sender", use_power=False, save_model=True):
     val_dataset = ConversationDataset(val_data, word_to_idx, max_length, max_conv_length, use_power, task)
     test_dataset = ConversationDataset(test_data, word_to_idx, max_length, max_conv_length, use_power, task)
     
+    # Analyze class distribution
+    train_labels = []
+    for item in train_dataset.processed_data:
+        train_labels.extend(item['labels'])
+    
+    # Count labels
+    label_counts = Counter(train_labels)
+    print(f"Training data label distribution: {label_counts}")
+    
+    # Adjust positive class weight based on class imbalance - from configs
+    if task.lower() == "sender":
+        if use_power:
+            positive_weight = 10.0  # From actual_lie/contextlstm+power.jsonnet
+        else:
+            positive_weight = 10.0  # From actual_lie/contextlstm.jsonnet
+    else:  # receiver task
+        if use_power:
+            positive_weight = 10.0  # From suspected_lie/contextlstm+power.jsonnet
+        else:
+            positive_weight = 15.0  # From suspected_lie/contextlstm.jsonnet
+    
     # Create data loaders
-    batch_size = 4  # From the config file (reduced due to hierarchical nature)
+    batch_size = 4  # From the config file
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_batch)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_batch)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_batch)
@@ -476,61 +744,43 @@ def run_contextlstm_model(task="sender", use_power=False, save_model=True):
         dropout=dropout
     ).to(device)
     
-    # Calculate class weights to handle class imbalance (from config files)
-    if task.lower() == "sender":
-        positive_weight = 10.0  # From actual_lie config
-    else:  # receiver task
-        positive_weight = 15.0  # From suspected_lie config
+    # Use weighted cross-entropy loss - matches pos_weight in config
+    criterion = WeightedCrossEntropyLoss(pos_weight=positive_weight)
     
-    # Use weighted cross-entropy loss
-    weight = torch.tensor([1.0, positive_weight]).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight)
-    
-    # Initialize optimizer
+    # Initialize optimizer - matches config's "optimizer"
     lr = 0.003  # From the config file
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     # Train the model
     n_epochs = 15  # From the config file
     patience = 10  # From the config file for contextlstm
-    best_val_loss = float('inf')
     epochs_without_improvement = 0
     best_model = None
     best_val_metrics = None
     
-    print(f"Starting training for {n_epochs} epochs...")
+    print(f"Starting training for {n_epochs} epochs with positive weight={positive_weight}...")
     # Add progress bar for epochs
     for epoch in tqdm(range(n_epochs), desc="Training epochs"):
         # Train
-        train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device, use_power)
+        train_loss, train_acc, train_macro_f1 = train_epoch(model, train_loader, optimizer, criterion, device, use_power)
         
         # Validate
-        val_loss, val_acc, val_preds, val_labels = evaluate(model, val_loader, criterion, device, use_power)
+        val_metrics, val_preds, val_labels = evaluate(model, val_loader, criterion, device, use_power)
         
-        # Calculate F1 scores
-        val_macro_f1 = f1_score(val_labels, val_preds, average='macro')
-        val_binary_f1 = f1_score(val_labels, val_preds, average='binary', pos_label=1)
+        print(f"Epoch {epoch+1}/{n_epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, Val Loss: {val_metrics['loss']:.4f}, Val Acc: {val_metrics['accuracy']:.4f}, Val Macro F1: {val_metrics['macro_f1']:.4f}, Val Binary F1: {val_metrics['binary_f1']:.4f}")
         
-        print(f"Epoch {epoch+1}/{n_epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val Macro F1: {val_macro_f1:.4f}, Val Binary F1: {val_binary_f1:.4f}")
-        
-        # Check for improvement
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Check for improvement - use macro_f1 to match config's "validation_metric": "+macro_fscore"
+        if best_val_metrics is None or val_metrics['macro_f1'] > best_val_metrics['macro_f1']:
             epochs_without_improvement = 0
             best_model = model.state_dict().copy()
-            best_val_metrics = {
-                'loss': val_loss,
-                'acc': val_acc,
-                'macro_f1': val_macro_f1,
-                'binary_f1': val_binary_f1,
-                'epoch': epoch + 1
-            }
-            print(f"New best model saved!")
+            best_val_metrics = val_metrics.copy()
+            best_val_metrics['epoch'] = epoch + 1
+            print(f"New best model saved! (macro F1: {val_metrics['macro_f1']:.4f})")
         else:
             epochs_without_improvement += 1
             print(f"No improvement for {epochs_without_improvement} epochs")
         
-        # Early stopping
+        # Early stopping with patience - matches config's "patience": 10
         if epochs_without_improvement >= patience:
             print(f"Early stopping after {epoch+1} epochs")
             break
@@ -539,17 +789,15 @@ def run_contextlstm_model(task="sender", use_power=False, save_model=True):
     if best_model is not None:
         model.load_state_dict(best_model)
     
-    # Evaluate on test set
-    test_loss, test_acc, test_preds, test_labels = evaluate(model, test_loader, criterion, device, use_power)
+    # Evaluate on test set - matches config's "evaluate_on_test": true
+    test_metrics, test_preds, test_labels = evaluate(model, test_loader, criterion, device, use_power)
     
-    # Calculate metrics
-    metrics = {
-        'accuracy': accuracy_score(test_labels, test_preds),
-        'macro_f1': f1_score(test_labels, test_preds, average='macro'),
-        'binary_f1': f1_score(test_labels, test_preds, average='binary', pos_label=1),
-        'precision': precision_score(test_labels, test_preds, pos_label=1, zero_division=0),
-        'recall': recall_score(test_labels, test_preds, pos_label=1, zero_division=0)
-    }
+    # Print prediction distribution
+    pred_counts = Counter(test_preds)
+    label_counts = Counter(test_labels)
+    print("\nPrediction distribution:")
+    print(f"Predicted labels: {pred_counts}")
+    print(f"Actual labels: {label_counts}")
     
     # Save the best model if requested
     if save_model and best_model is not None:
@@ -573,7 +821,8 @@ def run_contextlstm_model(task="sender", use_power=False, save_model=True):
                 'use_power': use_power,
                 'max_length': max_length,
                 'max_conv_length': max_conv_length,
-                'dropout': dropout
+                'dropout': dropout,
+                'positive_weight': positive_weight
             }
         }, model_path)
         
@@ -588,18 +837,18 @@ def run_contextlstm_model(task="sender", use_power=False, save_model=True):
     # Print results
     print(f"\n=== ContextLSTM Results for {task.upper()} Task ===")
     print(f"Power features: {'Yes' if use_power else 'No'}")
-    print(f"Test Loss: {test_loss:.4f}")
-    print(f"Accuracy: {metrics['accuracy']:.4f}")
-    print(f"Macro F1: {metrics['macro_f1']:.4f}")
-    print(f"Binary/Lie F1: {metrics['binary_f1']:.4f}")
-    print(f"Precision: {metrics['precision']:.4f}")
-    print(f"Recall: {metrics['recall']:.4f}")
+    print(f"Test Loss: {test_metrics['loss']:.4f}")
+    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
+    print(f"Macro F1: {test_metrics['macro_f1']:.4f}")
+    print(f"Binary/Lie F1: {test_metrics['binary_f1']:.4f}")
+    print(f"Precision: {test_metrics['precision']:.4f}")
+    print(f"Recall: {test_metrics['recall']:.4f}")
     
     # Print detailed classification report
     print("\nDetailed Classification Report:")
     print(classification_report(test_labels, test_preds, digits=4, target_names=['Truthful', 'Deceptive']))
     
-    return metrics
+    return test_metrics
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run ContextLSTM model for deception detection')
