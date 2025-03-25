@@ -6,6 +6,12 @@ This repository contains implementations of different models for detecting decep
 
 This project explores computational models for detecting deception in human-human text conversations from the game of Diplomacy. We implement various models ranging from simple baselines to advanced deep learning approaches, comparing their performance on detecting both actual lies (sender's intention) and suspected lies (receiver's perception).
 
+Context LSTM and Context LSTM+BERT is still in development.
+
+Main Observation from EDA Class are highly imbalance.
+
+The exploratory data analysis (EDA) of the Diplomacy dataset, inspired by "It Takes Two to Lie: One to Lie, and One to Listen," reveals 13,132 messages, with 591 actual lies (sender intent) and 566 suspected lies (receiver perception), averaging 20.79 words per message. This highlights a low deception rate and suggests potential challenges in detecting subtle lies within relatively short conversational exchanges.
+
 ## Installation
 
 ### Requirements
@@ -39,8 +45,7 @@ python -m spacy download en_core_web_sm
 
 The project uses the Diplomacy dataset from the original paper. The data should be placed in the following structure:
 ```
-d:\NLP\Deception_Detection\
-└── 2020_acl_diplomacy-master\
+─── 2020_acl_diplomacy-master\
     └── data\
         ├── train.jsonl
         ├── validation.jsonl
@@ -78,7 +83,7 @@ bash run_models.sh --model bertcontext --task receiver
 bash run_models.sh --help
 ```
 
-### Running Individual Models
+### Running Individual Models for windows
 
 #### Baseline Models
 
@@ -151,21 +156,31 @@ python implement_contextlstm.py --task receiver
 python implement_contextlstm.py --task receiver --power
 ```
 
-#### BERT+Context Model
+[//]: # (#### BERT+Context Model)
 
-```python
-# Run on sender task
-python implement_bertcontext.py --task sender
+[//]: # ()
+[//]: # (```python)
 
-# Run with power features
-python implement_bertcontext.py --task sender --power
+[//]: # (# Run on sender task)
 
-# Run on receiver task
-python implement_bertcontext.py --task receiver
+[//]: # (python implement_bertcontext.py --task sender)
 
-# Run on receiver task with power features
-python implement_bertcontext.py --task receiver --power
-```
+[//]: # ()
+[//]: # (# Run with power features)
+
+[//]: # (python implement_bertcontext.py --task sender --power)
+
+[//]: # ()
+[//]: # (# Run on receiver task)
+
+[//]: # (python implement_bertcontext.py --task receiver)
+
+[//]: # ()
+[//]: # (# Run on receiver task with power features)
+
+[//]: # (python implement_bertcontext.py --task receiver --power)
+
+[//]: # (```)
 
 ## Model Performance
 

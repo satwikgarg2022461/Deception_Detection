@@ -100,8 +100,10 @@ run_all_models() {
     echo "Running ALL models with ALL variations"
     echo "=========================================="
 
+#    Human baseline
+    python human_baseline.py
     # Baselines
-#    python implement_baselines.py
+    python implement_baselines.py
 
     # Harbingers
     python implement_harbingers.py --task sender
@@ -128,10 +130,10 @@ run_all_models() {
     python implement_contextlstm.py --task receiver --power
 
     # BERT+Context
-    python implement_bertcontext.py --task sender
-    python implement_bertcontext.py --task sender --power
-    python implement_bertcontext.py --task receiver
-    python implement_bertcontext.py --task receiver --power
+#    python implement_bertcontext.py --task sender
+#    python implement_bertcontext.py --task sender --power
+#    python implement_bertcontext.py --task receiver
+#    python implement_bertcontext.py --task receiver --power
 
     echo "=========================================="
     echo "Completed running ALL models with ALL variations"
