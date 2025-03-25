@@ -101,7 +101,7 @@ run_all_models() {
     echo "=========================================="
 
     # Baselines
-    python implement_baselines.py
+#    python implement_baselines.py
 
     # Harbingers
     python implement_harbingers.py --task sender

@@ -4,7 +4,7 @@ import joblib
 import pickle
 import numpy as np
 
-project_dir = "d:\\NLP\\Deception_Detection"
+project_dir = ""
 models_dir = os.path.join(project_dir, "models")
 
 def load_harbingers_model(task="sender", use_power=True):
