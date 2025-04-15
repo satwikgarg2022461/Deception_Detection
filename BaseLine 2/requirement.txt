@@ -1,0 +1,11 @@
+# Python dependencies
+openai>=1.0.0,<2.0.0
+scikit-learn>=1.2.0,<2.0.0
+
+# Ollama for local model inference
+# ollama>=0.1.0
+
+# Notes (not pip-installable via requirements.txt, but for reference):
+# Model used: llama3:instruct
+# Make sure to pull the model using the Ollama CLI before running:
+#   ollama pull llama3:instruct

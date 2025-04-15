@@ -1,2 +1,4 @@
-models
-embeddings_cache
+Baseline_1/embeddings_cache
+Baseline_1/models
+Novelty/saved_models
+.venv

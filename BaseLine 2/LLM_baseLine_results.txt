@@ -1,0 +1,46 @@
+--- Evaluation Results ---
+Total messages processed: 2741
+
+--- Sender Labels ---
+Number of Sender Labels Evaluated: 2741
+Sender Accuracy: 0.6359
+Sender F1 Score (Binary, for True): 0.1397
+Sender F1 Score (Micro): 0.6359
+
+Sender Confusion Matrix:
+        Predicted True  Predicted False
+Actual True    1662           839            
+Actual False   159            81             
+
+Sender Classification Report:
+              precision    recall  f1-score   support
+
+       False       0.09      0.34      0.14       240
+        True       0.91      0.66      0.77      2501
+
+    accuracy                           0.64      2741
+   macro avg       0.50      0.50      0.45      2741
+weighted avg       0.84      0.64      0.71      2741
+
+
+--- Receiver Labels ---
+(Skipped 266 messages due to 'NOANNOTATION' true label)
+Number of Receiver Labels Evaluated: 2475
+Receiver Accuracy: 0.5774
+Receiver F1 Score (Binary, for True): 0.1151
+Receiver F1 Score (Micro): 0.5774
+
+Receiver Confusion Matrix:
+        Predicted True  Predicted False
+Actual True    1361           949            
+Actual False   97             68             
+
+Receiver Classification Report:
+              precision    recall  f1-score   support
+
+       False       0.07      0.41      0.12       165
+        True       0.93      0.59      0.72      2310
+
+    accuracy                           0.58      2475
+   macro avg       0.50      0.50      0.42      2475
+weighted avg       0.88      0.58      0.68      2475
